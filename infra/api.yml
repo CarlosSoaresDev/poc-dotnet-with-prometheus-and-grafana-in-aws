@@ -75,7 +75,7 @@ Resources:
               Service: ecs-tasks.amazonaws.com
             Action: 'sts:AssumeRole'
       ManagedPolicyArns:
-        - 'arn:aws:iam::aws:policy/service-role/TaskRole'
+        - 'arn:aws:iam::938966323991:policy/TaskRole'
 
   TaskRole:
     Type: AWS::IAM::Role
