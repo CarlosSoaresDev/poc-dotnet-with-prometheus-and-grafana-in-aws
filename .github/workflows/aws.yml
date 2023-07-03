@@ -5,7 +5,7 @@ env:
   container-api: api-metrics
   container-prometheus: prometheus-metrics
   container-grafana: grafana-metrics
-  working-directory-build: ./app/src/catalog-application/
+  working-directory-build: ./app/api/src/api-metrics
   working-directory-root: ./ 
 
 on:
