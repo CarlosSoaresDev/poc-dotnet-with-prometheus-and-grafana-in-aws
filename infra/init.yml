@@ -27,3 +27,4 @@ Resources:
       RepositoryName: "grafana-metrics"
       ImageScanningConfiguration: 
         ScanOnPush: false
+        
