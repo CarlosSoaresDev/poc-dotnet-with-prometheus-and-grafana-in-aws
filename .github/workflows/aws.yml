@@ -93,7 +93,7 @@ jobs:
            aws cloudformation deploy \
            --template-file ./infra/api.yml \
            --capabilities CAPABILITY_NAMED_IAM \
-           --parameter-overrides  ${parameters[@]} DockerImage=${{ steps.build-image.outputs.image }} ServiceName=${{env.service-name}}-${{env.container-api}} AccessKey=${{ secrets.AWS_ACCESS_KEY_ID }} SecretKey=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
+           --parameter-overrides  ${parameters[@]} DockerImage=${{ steps.build-image.outputs.image }} ServiceName=${{env.service-name}}-api AccessKey=${{ secrets.AWS_ACCESS_KEY_ID }} SecretKey=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
            --stack-name ${{env.service-name}}
 
   # deploy-prometheus:
