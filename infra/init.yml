@@ -1,0 +1,29 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Infrastructure catalog application
+
+Resources:
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName:  Metrics
+      CapacityProviders:
+        - FARGATE
+        - FARGATE_SPOT
+  RepositoryECRApi:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: "api-metrics"
+      ImageScanningConfiguration: 
+        ScanOnPush: false
+  RepositoryECRPrometheus:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: "prometheus-metrics"
+      ImageScanningConfiguration: 
+        ScanOnPush: false
+  RepositoryECRGrafana:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: "grafana-metrics"
+      ImageScanningConfiguration: 
+        ScanOnPush: false

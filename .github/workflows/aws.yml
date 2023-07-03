@@ -1,0 +1,171 @@
+name: Metrics CI/CD
+
+env:
+  service-name: services-metrics
+  container-api: api-metrics
+  container-prometheus: prometheus-metrics
+  container-grafana: grafana-metrics
+  working-directory-build: ./app/src/catalog-application/
+  working-directory-root: ./ 
+
+on:
+  push:
+    branches: [ "master", "develop" ]
+  pull_request:
+    branches: [master, "develop"]
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@master 
+
+    - name: Setup .NET      
+      uses: actions/setup-dotnet@v3
+      with:
+       dotnet-version: 6.0.x
+
+    - name: Restore dependencies
+      run: dotnet restore
+      working-directory: ${{env.working-directory-build}}    
+
+    - name: Build application
+      run: dotnet build --no-restore
+      working-directory: ${{env.working-directory-build}}  
+
+  deploy-deps:
+    name: Deploy preps
+    env:
+       working-directory: ./infra   
+    runs-on: ubuntu-latest
+    steps:  
+     - uses: actions/checkout@master
+     - name: root directory
+       run: ls -R
+       working-directory: ${{env.worker-directory}}          
+     - name: Configure AWS credentials
+       id: credentialsaws
+       uses: aws-actions/configure-aws-credentials@v1
+       with:
+         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+         aws-region: ${{ secrets.AWS_REGION }}
+     - name: AWS CloudFormation "Deploy CloudFormation Stack" Action for GitHub Actions       
+       run: |
+           aws cloudformation deploy \
+           --template-file ./infra/init.yml \
+           --stack-name ${{env.service-name}}-init
+  
+  deploy-api:
+    name: Deploy api    
+    runs-on: ubuntu-latest
+    needs: build
+    steps:  
+     - name: Checkout
+       uses: actions/checkout@master 
+     - name: root directory
+       run: ls -R
+       working-directory: ${{env.worker-directory-root}}    
+     - name: Configure AWS credentials
+       id: credentialsaws
+       uses: aws-actions/configure-aws-credentials@v1
+       with:
+         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+         aws-region: ${{ secrets.AWS_REGION }}
+     - name: Build, tag, and push image to Amazon ECR
+       id: build-image
+       env:
+         parameters: ($(jq -r '.Parameters[] | [.ParameterKey, .ParameterValue] | "\(.[0])=\(.[1])"' ./infra/parameters.json))
+       run: |
+           aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{secrets.AWS_ACCOUNT}}.dkr.ecr.${{secrets.AWS_REGION}}.amazonaws.com
+           docker build -t ${{env.container-api}} ./app/src/.
+           docker tag ${{env.container-api}}:latest ${{secrets.AWS_ACCOUNT}}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{env.container-api}}:latest
+           docker push ${{secrets.AWS_ACCOUNT}}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{env.container-api}}:latest
+           echo "::set-output name=image::${{secrets.AWS_ACCOUNT}}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{env.container-api}}"
+     - name: AWS Deploy CloudFormation Stack
+       run: |
+           parameters=($(jq -r '.Parameters[] | [.ParameterKey, .ParameterValue] | "\(.[0])=\(.[1])"' ./infra/parameters.json)) 
+           echo ${parameters[@]}
+           aws cloudformation deploy \
+           --template-file ./infra/api.yaml \
+           --capabilities CAPABILITY_NAMED_IAM \
+           --parameter-overrides  ${parameters[@]} DockerImage=${{ steps.build-image.outputs.image }} ServiceName=${{env.service-name}}-${{env.container-api}} AccessKey=${{ secrets.AWS_ACCESS_KEY_ID }} SecretKey=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
+           --stack-name ${{env.service-name}}
+
+  # deploy-prometheus:
+  #   name: Deploy prometheus    
+  #   runs-on: ubuntu-latest
+  #   needs: build
+  #   steps:  
+  #    - name: Checkout
+  #      uses: actions/checkout@master 
+  #    - name: root directory
+  #      run: ls -R
+  #      working-directory: ${{env.worker-directory-root}}          
+  #    - name: Configure AWS credentials
+  #      id: credentialsaws
+  #      uses: aws-actions/configure-aws-credentials@v1
+  #      with:
+  #        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  #        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  #        aws-region: ${{ secrets.AWS_REGION }}
+  #    - name: Build, tag, and push image to Amazon ECR
+  #      id: build-image
+  #      env:
+  #        parameters: ($(jq -r '.Parameters[] | [.ParameterKey, .ParameterValue] | "\(.[0])=\(.[1])"' ./infra/parameters.json))
+  #      run: |
+  #          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{secrets.AWS_ACCOUNT}}.dkr.ecr.${{secrets.AWS_REGION}}.amazonaws.com
+  #          docker build -t ${{env.container-prometheus}} ./app/prometheus/.
+  #          docker tag ${{env.container-prometheus}}:latest ${{secrets.AWS_ACCOUNT}}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{env.container-prometheus}}:latest
+  #          docker push ${{secrets.AWS_ACCOUNT}}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{env.container-prometheus}}:latest
+  #          echo "::set-output name=image::${{secrets.AWS_ACCOUNT}}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{env.container-prometheus}}"
+  #    - name: AWS Deploy CloudFormation Stack
+  #      run: |
+  #          parameters=($(jq -r '.Parameters[] | [.ParameterKey, .ParameterValue] | "\(.[0])=\(.[1])"' ./infra/parameters.json)) 
+  #          echo ${parameters[@]}
+  #          aws cloudformation deploy \
+  #          --template-file ./infra/prometheus.yml \
+  #          --capabilities CAPABILITY_NAMED_IAM \
+  #          --parameter-overrides  ${parameters[@]} DockerImage=${{ steps.build-image.outputs.image }} ServiceName=${{env.service-name}}-${{env.container-prometheus}} AccessKey=${{ secrets.AWS_ACCESS_KEY_ID }} SecretKey=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
+  #          --stack-name ${{env.service-name}}
+
+  # deploy-grafana:
+  #   name: Deploy grafana     
+  #   runs-on: ubuntu-latest
+  #   needs: build
+  #   steps:  
+  #    - name: Checkout
+  #      uses: actions/checkout@master 
+  #    - name: root directory
+  #      run: ls -R
+  #      working-directory: ${{env.worker-directory-root}}          
+  #    - name: Configure AWS credentials
+  #      id: credentialsaws
+  #      uses: aws-actions/configure-aws-credentials@v1
+  #      with:
+  #        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  #        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  #        aws-region: ${{ secrets.AWS_REGION }}
+  #    - name: Build, tag, and push image to Amazon ECR
+  #      id: build-image
+  #      env:
+  #        parameters: ($(jq -r '.Parameters[] | [.ParameterKey, .ParameterValue] | "\(.[0])=\(.[1])"' ./infra/parameters.json))
+  #      run: |
+  #          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{secrets.AWS_ACCOUNT}}.dkr.ecr.${{secrets.AWS_REGION}}.amazonaws.com
+  #          docker build -t ${{env.container-grafana}} ./app/grafana/.
+  #          docker tag ${{env.container-grafana}}:latest ${{secrets.AWS_ACCOUNT}}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{env.container-grafana}}:latest
+  #          docker push ${{secrets.AWS_ACCOUNT}}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{env.container-grafana}}:latest
+  #          echo "::set-output name=image::${{secrets.AWS_ACCOUNT}}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{env.container-grafana}}"
+
+  #    - name: AWS Deploy CloudFormation Stack
+  #      run: |
+  #          parameters=($(jq -r '.Parameters[] | [.ParameterKey, .ParameterValue] | "\(.[0])=\(.[1])"' ./infra/parameters.json)) 
+  #          echo ${parameters[@]}
+  #          aws cloudformation deploy \
+  #          --template-file ./infra/grafana.yml \
+  #          --capabilities CAPABILITY_NAMED_IAM \
+  #          --parameter-overrides  ${parameters[@]} DockerImage=${{ steps.build-image.outputs.image }} ServiceName=${{env.service-name}}-${{env.container-grafana}} AccessKey=${{ secrets.AWS_ACCESS_KEY_ID }} SecretKey=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
+  #          --stack-name ${{env.service-name}}

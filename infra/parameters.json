@@ -1,0 +1,28 @@
+{
+  "Parameters": [
+    {
+      "ParameterKey": "VPC",
+      "ParameterValue": "vpc-04090ffb98a27969c"
+    },
+    {
+      "ParameterKey": "PrivateSubnetOne",
+      "ParameterValue": "subnet-06ff27d051b84aa10"
+    },
+    {
+      "ParameterKey": "PrivateSubnetTwo",
+      "ParameterValue": "subnet-03ce6055a483b5da2"
+    },
+    {
+      "ParameterKey": "Port",
+      "ParameterValue": 80
+    },
+    {
+      "ParameterKey": "ClusterName",
+      "ParameterValue": "Metrics"
+    },
+    {
+      "ParameterKey": "Environment",
+      "ParameterValue": "dev"
+    }
+  ]
+}

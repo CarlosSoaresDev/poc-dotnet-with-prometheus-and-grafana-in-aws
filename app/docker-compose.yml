@@ -1,0 +1,43 @@
+version: "3"
+services:
+  api:
+    build:
+      context: ./api/src
+      dockerfile: Dockerfile
+      args:
+        version: 1
+    image: web-api-metrics-metrics
+    ports:
+      - 8080:80
+    networks:
+      - web_api_metrics_network
+  prometheus:
+    build:
+      context: ./prometheus
+      dockerfile: Dockerfile
+      args:
+        version: 1
+    image: prometheus-local
+    restart: always
+    ports: 
+      - 9090:9090
+    networks:
+      - web_api_metrics_network
+    volumes: 
+      - './prometheus/data:/data'
+  grafana:
+    build:
+      context: ./grafana
+      dockerfile: Dockerfile
+      args:
+        version: 1
+    image: grafana-local
+    restart: always
+    ports:
+      - 3000:3000
+    networks: 
+      - web_api_metrics_network
+networks:
+  web_api_metrics_network:
+    attachable: true
+    driver: overlay

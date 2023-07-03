@@ -1,0 +1,293 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: API Metrics
+
+Parameters:
+  VPC:
+    Type: String
+  PrivateSubnetOne:
+    Type: String
+  PrivateSubnetTwo:
+    Type: String
+  DockerImage:
+    Type: String
+  ServiceName:
+    Type: String
+  Port:
+    Type: Number
+  ClusterName:
+    Type: String
+  Environment:
+    Description: Name of the environment launch.
+    Type: String
+  AccessKey:
+    Type: String
+  SecretKey:
+    Type: String
+
+Resources:
+
+# -------------------------------------------------------------------------
+# Deploy ECS services and taks 
+# -------------------------------------------------------------------------
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    DependsOn: LogGroup
+    Properties:
+      Family: !Join ['', [!Ref ServiceName, TaskDefinition]]
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: 512
+      Memory: 1024
+      ExecutionRoleArn: !Ref ExecutionRole
+      TaskRoleArn: !Ref TaskRole
+      ContainerDefinitions:
+        - Name: !Ref ServiceName
+          Image: !Ref DockerImage
+          PortMappings:
+            - ContainerPort: !Ref Port
+          Essential: true
+          Environment:
+            - Name: "ENVIRONMENT"
+              Value: !Ref Environment
+            - Name: "ASPNETCORE_ENVIRONMENT"
+              Value: !Ref Environment
+            - Name: "ACCESS_KEY"
+              Value: !Ref AccessKey
+            - Name: "SECRET_KEY"
+              Value: !Ref SecretKey
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref AWS::Region
+              awslogs-group: !Ref LogGroup
+              awslogs-stream-prefix: ecs
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['', [!Ref ServiceName, ExecutionRole]]
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['', [!Ref ServiceName, TaskRole]]
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Join ['', [!Ref ServiceName, SecurityGroup]]
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref Port
+          ToPort: !Ref Port
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: 0
+          ToPort: 0
+          CidrIp: 0.0.0.0/0
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - Listener
+    Properties: 
+      ServiceName: !Ref ServiceName
+      Cluster: !Ref ClusterName
+      TaskDefinition: !Ref TaskDefinition
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200       
+      DesiredCount: 2
+      HealthCheckGracePeriodSeconds: 200
+      LaunchType: FARGATE
+      NetworkConfiguration: 
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !Ref PrivateSubnetOne
+            - !Ref PrivateSubnetTwo
+          SecurityGroups:
+            - !Ref SecurityGroup
+      LoadBalancers:
+        - ContainerName: !Ref ServiceName
+          ContainerPort: !Ref Port
+          TargetGroupArn: !Ref TargetGroup 
+
+# -------------------------------------------------------------------------
+# Deploy NLB 
+# -------------------------------------------------------------------------
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Join ['', [!Ref ServiceName, TargetGroup]]
+      Port: !Ref Port
+      Protocol: TCP
+      TargetType: ip
+      VpcId: !Ref VPC
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - TargetGroupArn: !Ref TargetGroup
+          Type: forward
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: !Ref Port
+      Protocol: TCP
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${ServiceName}-nlb'
+      Type: network
+      Scheme: internal
+      Subnets:
+        - !Ref PrivateSubnetOne
+        - !Ref PrivateSubnetTwo
+
+# -------------------------------------------------------------------------
+# Deploy API GW HTTP API route and integration to private NLB via VPC Link
+# -------------------------------------------------------------------------
+
+  APIGWTvpcLink:
+    Type: AWS::ApiGateway::VpcLink
+    Properties:
+      Description: Vpc to connect gtw to nlb
+      Name: !Sub '${ServiceName}-apigw-vpclink'
+      TargetArns:
+        - !Ref LoadBalancer
+
+  APIGWTRestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub '${ServiceName}-apigw'
+      EndpointConfiguration : 
+       Types: 
+         - REGIONAL
+      Parameters:
+        endpointConfigurationTypes: REGIONAL
+                
+  APIGWTProxyResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref APIGWTRestApi
+      ParentId: !GetAtt 
+        - APIGWTRestApi
+        - RootResourceId
+      PathPart: '{proxy+}'
+
+  APIGWTMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref APIGWTRestApi
+      ResourceId: !Ref APIGWTProxyResource
+      HttpMethod: ANY
+      AuthorizationType: NONE
+      RequestParameters:
+        method.request.path.proxy: true
+      Integration:
+        RequestParameters:
+          integration.request.path.proxy: method.request.path.proxy
+        ConnectionId: !Ref APIGWTvpcLink
+        ConnectionType: VPC_LINK
+        IntegrationHttpMethod: ANY   
+        TimeoutInMillis: 15000
+        Type: HTTP_PROXY
+        Uri: !Sub 'http://${LoadBalancer.DNSName}/{proxy}'
+      
+  APIGWTDeployment:
+    DependsOn: APIGWTMethod
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref APIGWTRestApi
+      Description: Deploymento to api gtw
+      StageName: dev
+
+# -------------------------------------------------------------------------
+# Deploy Log group to ecs
+# -------------------------------------------------------------------------
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 3
+      LogGroupName: !Join ['', [/ecs/, !Ref ServiceName, TaskDefinition]]
+
+# -------------------------------------------------------------------------
+# Deploy Auto scaling to ecs tasks
+# -------------------------------------------------------------------------
+
+  AutoScalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+                - application-autoscaling.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: '/'
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:DescribeServices
+                  - ecs:UpdateService
+                  - cloudwatch:DeleteAlarms
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:PutMetricAlarm
+                Resource: '*'
+
+  AutoScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MinCapacity: 1
+      MaxCapacity: 8
+      ResourceId: !Join
+        - '/'
+        - - service
+          - !Ref ClusterName
+          - !GetAtt Service.Name
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      RoleARN: !GetAtt AutoScalingRole.Arn
+
+  ScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub '${Service}ScalePolicy'
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref AutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        TargetValue: 30.0
+        ScaleInCooldown: 5
+        ScaleOutCooldown: 5
+        DisableScaleIn: false
