@@ -82,7 +82,7 @@ jobs:
          parameters: ($(jq -r '.Parameters[] | [.ParameterKey, .ParameterValue] | "\(.[0])=\(.[1])"' ./infra/parameters.json))
        run: |
            aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{secrets.AWS_ACCOUNT}}.dkr.ecr.${{secrets.AWS_REGION}}.amazonaws.com
-           docker build -t ${{env.container-api}} ./app/src/.
+           docker build -t ${{env.container-api}} ./app/api/src/.
            docker tag ${{env.container-api}}:latest ${{secrets.AWS_ACCOUNT}}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{env.container-api}}:latest
            docker push ${{secrets.AWS_ACCOUNT}}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{env.container-api}}:latest
            echo "::set-output name=image::${{secrets.AWS_ACCOUNT}}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{env.container-api}}"
